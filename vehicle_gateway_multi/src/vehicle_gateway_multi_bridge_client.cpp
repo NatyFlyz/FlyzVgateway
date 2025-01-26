@@ -18,14 +18,21 @@
 
 const char * kind_to_str(z_sample_kind_t kind);
 
-void data_handler(const z_sample_t * sample, void * /*arg*/)
-{
-  z_owned_str_t keystr = z_keyexpr_to_string(sample->keyexpr);
-  printf(
-    ">> [Subscriber] Received %s ('%s': '%.*s')\n", kind_to_str(sample->kind), z_loan(keystr),
-    static_cast<int>(sample->payload.len), sample->payload.start);
-  z_drop(z_move(keystr));
-}
+void data_handler(z_loaned_sample_t * sample, void * /*arg*/)
+ {
+    z_view_string_t key_string;
+    z_keyexpr_as_view_string(z_sample_keyexpr(sample), &key_string);
+
+    z_owned_string_t payload_string;
+    z_bytes_to_string(z_sample_payload(sample), &payload_string);
+
+    printf(">> [Subscriber] Received %s ('%.*s': '%.*s')\n", kind_to_str(z_sample_kind(sample)),
+           (int)z_string_len(z_loan(key_string)), z_string_data(z_loan(key_string)),
+           (int)z_string_len(z_loan(payload_string)), z_string_data(z_loan(payload_string)));
+
+    z_drop(z_move(payload_string));
+
+ }
 
 int main(int argc, char ** argv)
 {
@@ -34,9 +41,10 @@ int main(int argc, char ** argv)
     expr = argv[1];
   }
 
-  z_owned_config_t config = z_config_default();
+  z_owned_config_t config;
+  z_config_default(&config);
   if (argc > 2) {
-    if (zc_config_insert_json(z_loan(config), Z_CONFIG_LISTEN_KEY, argv[2]) < 0) {
+    if (zc_config_insert_json5(z_loan_mut(config), Z_CONFIG_LISTEN_KEY, argv[2]) < 0) {
       printf(
         "Couldn't insert value `%s` in configuration at `%s`. "
         "This is likely because `%s` expects a "
@@ -48,17 +56,22 @@ int main(int argc, char ** argv)
   }
 
   printf("Opening session...\n");
-  z_owned_session_t s = z_open(z_move(config));
-  if (!z_check(s)) {
-    printf("Unable to open session!\n");
-    exit(-1);
-  }
+  z_owned_session_t s;
+  if (z_open(&s, z_move(config), NULL)) {
+     printf("Unable to open session!\n");
+     exit(-1);
+   }
 
-  z_owned_closure_sample_t callback = z_closure(data_handler);
+  z_owned_closure_sample_t callback;
+  z_closure(&callback, data_handler, NULL, NULL);
   printf("Declaring Subscriber on '%s'...\n", expr);
-  z_owned_subscriber_t sub =
-    z_declare_subscriber(z_loan(s), z_keyexpr(expr), z_move(callback), NULL);
-  if (!z_check(sub)) {
+
+  z_owned_subscriber_t sub;
+
+  z_view_keyexpr_t ke;
+  z_view_keyexpr_from_str(&ke, expr);
+  if (z_declare_subscriber(z_loan(s), &sub, z_loan(ke), z_move(callback), NULL)){
+
     printf("Unable to declare subscriber.\n");
     exit(-1);
   }
@@ -73,7 +86,7 @@ int main(int argc, char ** argv)
   }
 
   z_undeclare_subscriber(z_move(sub));
-  z_close(z_move(s));
+  z_drop(z_move(s));
   return 0;
 }
 

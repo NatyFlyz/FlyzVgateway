@@ -78,9 +78,9 @@ public:
       });
 
     std::cout << "sending state message...\n";
-    this->pub_ = z_declare_publisher(
-      z_loan(*this->session_), z_keyexpr(this->zenoh_key_name_.c_str()), NULL);
-    if (!z_check(this->pub_)) {
+     z_view_keyexpr_t ping;
+    z_view_keyexpr_from_str_unchecked(&ping, (vehicle_id_prefix + "/fmu/out/vehicle_gps_position").c_str());
+    if ( z_declare_publisher(z_loan(*this->session_), &this->pub_, z_loan(ping), NULL) ) {
       std::cout << "Unable to declare Publisher for key expression!\n";
       return -1;
     }
@@ -104,12 +104,21 @@ public:
     this->newdata_ = false;
 
     string s = j.dump();
-    z_publisher_put_options_t options = z_publisher_put_options_default();
-    options.encoding = z_encoding(Z_ENCODING_PREFIX_TEXT_JSON, NULL);
+    z_publisher_put_options_t options;
+    z_publisher_put_options_default(&options);
+
+    z_owned_encoding_t encoding;
+    z_encoding_clone(&encoding, z_encoding_text_json());
+    options.encoding = z_move(encoding);
+
+    z_owned_bytes_t payload;
+    z_bytes_copy_from_str(&payload, s.c_str());
+
+
+
     z_publisher_put(
       z_loan(this->pub_),
-      reinterpret_cast<const uint8_t *>(s.c_str()),
-      s.size() + 1,
+      z_move(payload),
       &options);
   }
 
@@ -136,14 +145,14 @@ int main(int argc, char ** argv)
     return EXIT_FAILURE;
   }
   const char * zenoh_config_file = argv[1];
-  z_owned_config_t config = zc_config_from_file(zenoh_config_file);
-  if (!z_check(config)) {
+  z_owned_config_t config;
+  if (zc_config_from_file(&config, zenoh_config_file)) {  
     std::cout << "unable to parse zenoh config from [" << zenoh_config_file << "]\n";
     return EXIT_FAILURE;
   }
   std::cout << "opening zenoh session...\n";
-  z_owned_session_t session = z_open(z_move(config));
-  if (!z_check(session)) {
+  z_owned_session_t session;
+  if ( z_open(&session, z_move(config), NULL) ) {
     std::cout << "unable to open zenoh session\n";
     return EXIT_FAILURE;
   }
@@ -180,7 +189,7 @@ int main(int argc, char ** argv)
   rclcpp::shutdown();
 
   std::cout << "closing zenoh session...\n";
-  z_close(z_move(session));
+  z_drop(z_move(session));
 
   return EXIT_SUCCESS;
 }

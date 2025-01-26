@@ -55,21 +55,23 @@ public:
   }
 
   std::shared_ptr<vehicle_gateway::VehicleGateway> gateway_;
-  void state_handler(const z_sample_t * sample);
+  void state_handler(z_loaned_sample_t* sample);
 
 private:
   std::shared_ptr<pluginlib::ClassLoader<vehicle_gateway::VehicleGateway>> loader_;
   bool following_active{false};
 };
 
-void Follower::state_handler(const z_sample_t * sample)
+void Follower::state_handler(z_loaned_sample_t* sample)
 {
+  z_owned_string_t payload_string;
+  z_bytes_to_string(z_sample_payload(sample), &payload_string);
   json j;
   try {
     j = json::parse(
       std::string(
-        reinterpret_cast<const char *>(sample->payload.start),
-        sample->payload.len));
+          z_string_data(z_loan(payload_string)),
+          (int)z_string_len(z_loan(payload_string))));
   } catch (...) {
     printf("error parsing json\n");
     return;
@@ -122,7 +124,7 @@ void Follower::state_handler(const z_sample_t * sample)
   }
 }
 
-void state_handler(const z_sample_t * sample, void * context)
+void state_handler(z_loaned_sample_t* sample, void * context)
 {
   Follower * follower = reinterpret_cast<Follower *>(context);
   follower->state_handler(sample);
@@ -149,13 +151,15 @@ int main(int argc, const char * argv[])
   // desired vehicle_id is living in. If not, this will silently be sad.
   // todo: detect this situation and print a helpful warning message.
 
-  z_owned_closure_sample_t callback = z_closure(state_handler, NULL, vg.get());
+  z_owned_closure_sample_t callback;
+  z_closure(&callback, state_handler, NULL, vg.get());
   z_owned_session_t * zenoh_session = reinterpret_cast<z_owned_session_t *>(
     vg->gateway_->get_multirobot_session());
+  z_view_keyexpr_t ke;
+  z_view_keyexpr_from_str(&ke, "vehicle_gateway/*/state");
 
-  z_owned_subscriber_t state_sub = z_declare_subscriber(
-    z_loan(*zenoh_session),
-    z_keyexpr("vehicle_gateway/*/state"), z_move(callback), NULL);
+  z_owned_subscriber_t state_sub;
+  z_declare_subscriber( z_loan(*zenoh_session), &state_sub, z_loan(ke), z_move(callback), NULL);
 
   rclcpp::WallRate loop_rate(std::chrono::milliseconds(500));
   while (rclcpp::ok()) {
